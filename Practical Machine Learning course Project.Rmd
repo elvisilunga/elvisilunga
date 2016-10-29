@@ -1,0 +1,164 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Elvis Ilunga"
+date: "28 October 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Practical Machine Learning Project-PML Data Analysis"
+author: "Elvis Ilunga"
+date: "28 October 2016"
+output: html_document
+---
+
+#Introduction  
+
+##Background    
+From the website   
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).    
+
+#Objective    
+
+The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. We may use any of the other variables to predict with. We should create a report describing how you built your model, how we used cross validation, what we think the expected out of sample error is, and why we made the choices we did. We will also use our prediction model to predict 20 different test cases.       
+
+#Data Preprocessing    
+  
+##Data overview    
+  
+The training data for this project are available here:  
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  
+
+The test data are available here:   
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv   
+The data for this project come from this source:   http://groupware.les.inf.puc-rio.br/har.  
+  
+##Data description       
+  
+From the website:   
+"Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E)."   
+
+#Environment   
+```{r}
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(MASS)
+library(gbm)
+library(ggplot2)
+```  
+
+#Data Loading and Cleaning   
+I read in the two provided data sets, I discarded the respected last variable from each so to be able to combine them into one full data set and proceed to clean it once for all. Get rid of columns with more than 50% missing values (NA), and unnecessary variables such as user_name that will not help in the prediction, and finally those variables with near zero variance.   
+```{r}
+Training <- read.csv("pml-training.csv")
+Testing <- read.csv("pml-testing.csv")
+new_Training <- Training[,-160]
+new_Testing <- Testing[,-160]
+full_case <- rbind(new_Training,new_Testing)
+is.na(full_case) <- full_case == c("NA","#DIV/0!","")
+sum(is.na(full_case))
+full_case <- full_case[, -c(1:7)]
+```  
+
+```{r}
+clean_case <- full_case #creating another subset to iterate in loop
+for(i in 1:length(full_case)) { #for every column in the training dataset
+  if( sum( is.na(full_case[, i] ) ) /nrow(full_case) >= .5 ) { #if n?? NAs > 50% of total observations
+    for(j in 1:length(clean_case)) {
+      if( length( grep(names(full_case[i]), names(clean_case)[j]) ) ==1)  { #if the columns are the same:
+        clean_case <- clean_case[ , -j] #Remove that column
+      }   
+    } 
+  }
+}
+badCol <- nearZeroVar(clean_case, saveMetrics = T) #discarding variables with near zero variance
+clean_case <- clean_case[, badCol$nzv==F]
+```
+
+```{r}
+##Let get back to the original Training and Testing set (the 20 last obs)
+clean_Training <- clean_case[1:19622,]
+clean_Testing <- clean_case[19623:19642,]
+clean_Testing$problem_id <- Testing$problem_id
+clean_Training$classe <- factor(Training$classe) #transfoming the outcome variable
+```
+
+#Cross Validation   
+We performed a cross validation by subsampling our training data set randomly without replacement into 2 subsamples: subtraining data (70% of the original Training data set) and subtesting data (30%) as the original sample size is quite big enough.   
+```{r}
+intrain <- createDataPartition(y=clean_Training$classe, p=0.7,list = F)
+smallTraining <- clean_Training[intrain,]
+smallTesting <- clean_Training[-intrain,]
+```   
+#Exploratory Data Analysis  
+The variable classe contains 5 levels. The plot of the outcome variable shows the frequency of each levels in the subTraining data.   
+```{r}
+plot(clean_Training$classe, col="blue", main="Levels of the variable classe", xlab="classe levels", ylab="Frequency")
+```   
+
+The plot above shows that Level A is the most frequent classe. D appears to be the least frequent one.   
+
+#Prediction: Building Models Using ML Algorithms   
+Three methods are applied to build different models during the training phase on the smallTraining, which is our subtraining of the main Training dataset. The best model (with higher accuracy when applied to the Test dataset) will be used for the final predictions to predict the twenty cases. The methods are: Random Forests, Decision Tree and Generalized Boosted Model. In each case a confusion matrix is generated to appreciate the accuracy and onther statistics.   
+#a) Method 1: Decision Tree   
+```{r}
+modelFit1 <- rpart(classe~., method = "class", data = smallTraining)
+predmodel1 <- predict(modelFit1, newdata = smallTesting, type = "class")
+```
+To view the decision tree in a fancy may:   
+```{r}
+fancyRpartPlot(modelFit1)
+```  
+Here is the confusion matrix for the first model with decision tree.   
+```{r}
+confusionMatrix(predmodel1, smallTesting$classe)
+```   
+Predicting with decision tree yields an accuracy of about 73%, which is not too bad but let see the accuracy of the other methods.   
+#b) Method 2: Generalized Boosted Models (GBM)   
+
+```{r}
+set.seed(123)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modelFit2  <- train(classe ~ ., data=smallTraining, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+predmodel2 <- predict(modelFit2, newdata=smallTesting)
+```   
+The confusion matrix to appreciate the accuracy of the GBM is given below.   
+```{r}
+confusionMatrix(predmodel2, smallTesting$classe)
+```   
+It can be seen that there is a lot of improvement with this model, the accuracy is of about 96% but let see what the next method will produce.   
+
+#c) Method 3: Random Forest   
+```{r}
+set.seed(123)
+controls <- trainControl(method = "cv", number=6)
+modelFit3 <- train(classe~., data=smallTraining, trControl=controls)
+predmodel3 <- predict(modelFit3, newdata = smallTesting)
+```  
+Here is the confustion matrix to appreciate the accuracy of the RF model  
+```{r}
+confusionMatrix(predmodel3, smallTesting$classe)
+```   
+Clearly the confusion matrices show that the Random Forest algorithm performs better than decision trees and GBM. The accuracy for the Random Forest model was 0.995 (95% CI: (0.993, 0.997)) compared to 0.739 (95% CI: (0.727, 0.752)) for Decision Tree model. The random Forest model is choosen to predict the twenty cases in the Testing dataset.   
+
+#Expected out-of-sample error   
+
+The expected out-of-sample error is estimated at 0.005, or 0.5%. The expected out-of-sample error is calculated as 1 - accuracy for predictions made against the cross-validation set. The Testing dataset has 20 cases. With an accuracy of 99% on our cross-validation dataset, we can expect that very few of the test samples will be missclassified.   
+
+#Prediction with the winning model (Random Forest)   
+```{r}
+PredTest <- predict(modelFit2, newdata = clean_Testing)
+PredTest
+```
+The accuracy of this model, random forest, on this data is confirmed by submtting the predictions of its output to the second part of this project as all the answers provided 20 cases are all correct.   
